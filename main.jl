@@ -34,33 +34,66 @@ using POMDPs, QuickPOMDPs, NativeSARSOP, POMDPModels, POMDPTools, QMDP
 # )
 
 m = QuickPOMDP(
-    #Number of months away for time until ready and for your current launch date
-    states=["3", "6", "9", "12"],
-    actions=["nothing", "reschedule"],
-    observations=["time to ready", "cur_launch"],
-    initialstate=Uniform(["3", "6", "9", "12"]),
-    discount=0.95,
-    transition=function (s, a)
-        return (Deterministic(s))
-        if a == "nothing" #stay in same state
-            return Deterministic(s)
-        else
-            return Uniform(["3", "6", "9", "12"]) # reschedule
+    states=["now", "later", "much later"],
+    actions=["reschedule", "don't reschedule"],
+    observations=["now", "later", "much later"],
+    initialstate=Uniform(["now", "later", "much later"]),
+    discount=0.95, transition=function (s, a)
+        if a == "don't reschedule"
+            return Deterministic(s) # tiger stays behind the same door
+        else # a door is opened
+            return Uniform(["now", "later", "much later"]) # reset
         end
-    end,
-    observation=function (s, a)
-        if a == "nothing"
-            return (Deterministic(s))
-        end
-    end,
-    reward=function (s, a)
+    end, observation=function (a, sp)
         if a == "reschedule"
-            return -100
+            if sp == "later"
+                return SparseCat(["now", "later", "much later"], [0.0, 1.0, 0.0]) # sparse categorical distribution
+            elseif sp == "much later"
+                return SparseCat(["now", "later", "much later"], [0.0, 0.0, 1.0])
+            else
+                return SparseCat(["now", "later", "much later"], [1.0, 0.0, 0.0])
+            end
         else
-            return 10
+            return Uniform(["now", "later", "much later"])
+        end
+    end, reward=function (s, a)
+        if a == "don't reschedule"
+            return 10.0
+        else # the tiger was escaped
+            return -100.0
         end
     end
 )
+
+#****Won't converge for some reason; getting issues with length of the type of my 
+#states (regardless of whether it's string, tuple, int, etc)
+
+# m = QuickPOMDP(
+#     # First part of state tuple is number of months until ready launch is ready right now, and second number is 
+#     # currently scheduled launch date launch date
+#     states=[(6, 6), (6, 12), (12, 6), (12, 12)],
+#     actions=["do nothing", "reschedule"],
+#     observations=[(6, 6), (6, 12), (12, 6), (12, 12)],
+#     initialstate=Uniform([(6, 6), (6, 12), (12, 6), (12, 12)]),
+#     discount=0.95,
+#     transition=function (s, a)
+#         if a == "do nothing" #stay in same state
+#             return Deterministic(s)
+#         else
+#             return Uniform(states) # reschedule
+#         end
+#     end,
+#     observation=function (s)
+#         return (Deterministic(s))
+#     end,
+#     reward=function (a)
+#         if a == "reschedule"
+#             return -100
+#         else
+#             return 10
+#         end
+#     end
+# )
 
 solver = SARSOPSolver()
 policy = solve(solver, m)
