@@ -34,16 +34,29 @@ using POMDPs, QuickPOMDPs, NativeSARSOP, POMDPModels, POMDPTools, QMDP
 # )
 
 m = QuickPOMDP(
+    # States = (time to launch in months (0-24), time to ready in months (0-24)) -> build a belief over these 625 states
+    # Initial state = (24,24)
+    # Terminal state = (0,0) 
     states=["now", "later", "much later"],
+
+    # Actions = do nothing, update time to launch to (0-24) months
     actions=["reschedule", "don't reschedule"],
     observations=["now", "later", "much later"],
     initialstate=Uniform(["now", "later", "much later"]),
+
+    # Transition T(s'|s,a):
+    # Assumption: changing time to launch does not influence time to ready
+    # If a = do nothing, subtract 1 from both time to launch and time to ready
+    # If a = update time to launch, update accordingly and subtract 1 from time to ready
     discount=0.95, transition=function (s, a)
         if a == "don't reschedule"
             return Deterministic(s) # tiger stays behind the same door
         else # a door is opened
             return Uniform(["now", "later", "much later"]) # reset
         end
+
+    # Observation O(o|a,s') -> updating time to launch does not influence time to ready -> O(o|s'):
+    # TODO: talk to Mykel
     end, observation=function (a, sp)
         if a == "reschedule"
             if sp == "later"
@@ -56,6 +69,15 @@ m = QuickPOMDP(
         else
             return Uniform(["now", "later", "much later"])
         end
+
+    # Reward R(s,a): 
+    # Scaled negative reward for updating time to launch
+        # Smaller negative reward for pushing time up, larger negative reward for pushing time back
+    # Small positive reward (or maybe even zero reward?) for doing nothing; better to not have to move the launch date
+    # Large positive reward for reaching terminal state (0,0)
+    # Scaled negative reward for doing nothing when time to launch < time to ready
+        # Smaller negative reward if time to launch/ready are larger; it's bad to wait until the last minute to reschedule
+    # Large negative reward if time to ready = 0 and time to launch != 0
     end, reward=function (s, a)
         if a == "don't reschedule"
             return 10.0
@@ -64,36 +86,6 @@ m = QuickPOMDP(
         end
     end
 )
-
-#****Won't converge for some reason; getting issues with length of the type of my 
-#states (regardless of whether it's string, tuple, int, etc)
-
-# m = QuickPOMDP(
-#     # First part of state tuple is number of months until ready launch is ready right now, and second number is 
-#     # currently scheduled launch date launch date
-#     states=[(6, 6), (6, 12), (12, 6), (12, 12)],
-#     actions=["do nothing", "reschedule"],
-#     observations=[(6, 6), (6, 12), (12, 6), (12, 12)],
-#     initialstate=Uniform([(6, 6), (6, 12), (12, 6), (12, 12)]),
-#     discount=0.95,
-#     transition=function (s, a)
-#         if a == "do nothing" #stay in same state
-#             return Deterministic(s)
-#         else
-#             return Uniform(states) # reschedule
-#         end
-#     end,
-#     observation=function (s)
-#         return (Deterministic(s))
-#     end,
-#     reward=function (a)
-#         if a == "reschedule"
-#             return -100
-#         else
-#             return 10
-#         end
-#     end
-# )
 
 solver = SARSOPSolver()
 policy = solve(solver, m)
