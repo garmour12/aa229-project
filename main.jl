@@ -1,11 +1,12 @@
 import Pkg
-using POMDPs, QuickPOMDPs, NativeSARSOP, POMDPModels, POMDPTools, QMDP #POMDPLinter
-import Distributions: Normal
+using POMDPs, QuickPOMDPs, NativeSARSOP, POMDPModels, POMDPTools, QMDP
+import POMDPTools: Deterministic
+import Distributions: Normal, truncated
 import LinearAlgebra: normalize
 
 
 # Helper function: linear scaling of standard deviation
-function dummySTD(x)
+function LinearSTDScaling(x)
     return x >= 0 ? 0.125 * x : 0
 end
 
@@ -20,10 +21,8 @@ m = QuickPOMDP(
     # Observations: t_launch fully observable, t_ready partially observable
     observations = [(i, j) for i in -1:24, j in 0:24],
 
-    initialstate = Deterministic((-1, 24)),  # Initial state is (-1, 24) Maybe randomize t_ready for trials?
-    isterminal = function(s)                 # Terminal state is (0, 0,); product is ready and launched
-        s == (0, 0)
-    end,
+    initialstate = Uniform([(i, j) for i = -1, j in 12:24]), # Initial state = no set launch date, 1-2 years out from ready
+    isterminal = s -> s == (0, 0),                           # Terminal state is (0, 0,); ready and launched
     discount = 1,  # No discounting in SSP
 
     # Transition
@@ -43,60 +42,34 @@ m = QuickPOMDP(
             end
         end
 
-        new_s = (t_launch, t_ready)
-        return Deterministic(new_s)
-    end, 
-    
-    # Observation (unaffected by action) TODO: figure this distribution stuff out
-    observation=function (a, sp)
-        t_launch, t_ready = sp
-        #REMEMBER: Julia is 1-indexed
-        mean = t_launch
-        #will scale directly with time
-        std = dummySTD(mean)
-
-        observation_dist = Normal(mean, std)
-        #will be for the 25 values or the gicen time to scheduled launch; the values will sum to 1 after normalization step
-        probs = []
-        observations_list_copy = [(i, j) for i in -1:24, j in 0:24]
-        t_ready_values = [i for i in 0:24]
-        #doing this for each observation
-        for obs in t_ready_values
-            pdf_val = pdf(observation_dist, obs)
-            #Hoping to avoid floating point errors later
-            pdf_val = round(pdf_val; digits=6)
-            #Evaluate the pdf of the normal exactly at the given time to ready value
-            push!(probs, pdf_val)
-        end
-
-        #normalize(probs)
-        #normalize list of probs so that same relation kept, but they will definitely sum to 1
-        probs /= sum(probs)
-        sum_probs = sum(probs)
-        if abs(sum(sum_probs) - 1) > 0
-            adjust = 1.0 - sum(probs)
-            #@show adjust
-            max_prob_idx = argmax(probs)
-            probs[max_prob_idx] += adjust
-        end
-        println(sum(probs))
-        #Hoping to account for floating point arithmetic error
-        #probs_rounded = round.(probs; digits=6)
-        #@show sum(probs_rounded)
-        #Will be of length 250 for every possible ttsl/ttr pair
-        all_observation_pair_probs = []
-        for obs in observations_list_copy
-            if obs[1] == t_launch
-                cur_probs_idx = obs[2]
-                push!(all_observation_pair_probs, probs[cur_probs_idx+1])
-            else
-                push!(all_observation_pair_probs, 0.0)
+        if t_launch == -1
+            if a != -1
+                t_launch = a   # Set initial launch date
             end
         end
-        total_prob = sum(all_observation_pair_probs)
-        @show total_prob
 
-        return SparseCat(observations_list_copy, all_observation_pair_probs)
+        if s == (0,0)
+           return Uniform([(i, j) for i = -1, j in 12:24])  # Reset to initial state
+        end
+        s = (t_launch, t_ready)
+        #print("State: ", s)
+        #print("Action: ", a)
+        return Deterministic((t_launch, t_ready))
+    end, 
+    
+    # Observation
+    observation = function(a, sp)
+        t_launch = sp[1]
+        t_ready = sp[2]
+        mean = t_ready
+        std = LinearSTDScaling(t_ready)
+        obs_distribution = Normal(mean, std)
+        truncated_obs_distribution = truncated(obs_distribution, 0, 24)
+
+        print("Time to launch: ", t_launch)
+        print("Time to ready: ", t_ready)
+        print("Observation")
+        return Uniform([(t_launch1, est_t_ready) for t_launch1 = t_launch, est_t_ready = rand(truncated_obs_distribution, 50)[1:50]])
     end, 
     
     # Reward/Cost
@@ -124,24 +97,15 @@ m = QuickPOMDP(
 
         if t_launch == 0 && t_ready > 0  # Missed launch date = very large cost
             timestep_cost -= 1000
-        elseif t_launch < t_ready         # Small cost for seemingly being behind
+        elseif t_launch < t_ready        # Small cost for seemingly being behind
             timestep_cost -= 100
         end
-
-        """
-            Metrics:
-                    Total cost of the policy:
-                        Higher cost means poorer decision making that lead to the final result
-                    Number of times we overshoot compared to baseline
-                        Greedy will probably not do this too much but will incur high cost
-                    Runtime
-                        Nice to have go faster if possible
-        """
+        
         return timestep_cost
     end
 )
 
-solver = SARSOPSolver()
+solver = SARSOPSolver(verbose=true)
 #solver = QMDPSolver()
 policy = solve(solver, m)
 
